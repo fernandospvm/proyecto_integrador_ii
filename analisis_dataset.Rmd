@@ -1,0 +1,343 @@
+---
+title: "Análisis exploratorio del Amazon Delivery Dataset"
+author: "Grupo 3 – Proyecto Integrador II: Helena Ventura-Travesset, Javier Gaudencio Ortega, Sara Miguel Winterburn, Fernando San Prudencio"
+date: "19/04/2026"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.align = "center", fig.width = 8, fig.height = 5)
+
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(knitr)
+library(scales)
+```
+
+---
+
+## Introducción
+
+El presente informe recoge el análisis exploratorio del *Amazon Delivery Dataset*, que contiene registros reales de entregas realizadas por Amazon en varias ciudades de la India durante el año 2022. El objetivo de este análisis es comprender la estructura del conjunto de datos, identificar los factores que influyen en el tiempo de entrega y extraer conclusiones útiles para el posterior desarrollo del sistema de optimización de rutas.
+
+```{r carga}
+data <- read.csv("amazon_delivery.csv", stringsAsFactors = FALSE)
+
+# Limpieza básica de espacios en variables categóricas
+data <- data %>%
+  mutate(across(c(Traffic, Vehicle, Area, Weather, Category), str_trim))
+
+# Eliminamos filas con valores críticos ausentes
+data <- data %>% filter(!is.na(Delivery_Time))
+
+cat("Registros totales:", nrow(data), "\n")
+cat("Variables:", ncol(data), "\n")
+```
+
+---
+
+## Estadística descriptiva
+
+Antes de entrar en el análisis por factores, conviene describir las principales variables numéricas del dataset para tener una imagen global de su distribución.
+
+```{r descriptiva}
+resumen <- data %>%
+  summarise(
+    `Media (min)`     = round(mean(Delivery_Time, na.rm = TRUE), 1),
+    `Mediana (min)`   = median(Delivery_Time, na.rm = TRUE),
+    `Desv. típica`    = round(sd(Delivery_Time, na.rm = TRUE), 1),
+    `Mínimo (min)`    = min(Delivery_Time, na.rm = TRUE),
+    `Máximo (min)`    = max(Delivery_Time, na.rm = TRUE)
+  )
+
+kable(resumen, caption = "Estadísticas descriptivas de Delivery_Time")
+```
+
+La distribución del tiempo de entrega se puede visualizar con mayor detalle a través de su histograma:
+
+```{r histograma-delivery}
+ggplot(data, aes(x = Delivery_Time)) +
+  geom_histogram(binwidth = 10, fill = "#2A9D8F", color = "white", alpha = 0.9) +
+  geom_vline(aes(xintercept = mean(Delivery_Time, na.rm = TRUE)),
+             color = "#E63946", linetype = "dashed", linewidth = 0.8) +
+  annotate("text", x = mean(data$Delivery_Time, na.rm = TRUE) + 8,
+           y = 3500, label = paste0("Media: ", round(mean(data$Delivery_Time, na.rm = TRUE), 1), " min"),
+           color = "#E63946", size = 3.5) +
+  labs(title = "Distribución del tiempo de entrega",
+       x = "Tiempo de entrega (minutos)", y = "Número de pedidos") +
+  theme_minimal(base_size = 12)
+```
+
+---
+
+## Factores que afectan al tiempo de entrega
+
+### Tráfico
+
+El nivel de tráfico es probablemente el factor operativo más determinante en la duración de una entrega urbana. El siguiente gráfico muestra la distribución del tiempo de entrega según cada nivel de congestión registrado.
+
+```{r trafico}
+data %>%
+  filter(Traffic != "NaN") %>%
+  mutate(Traffic = factor(Traffic, levels = c("Low", "Medium", "High", "Jam"))) %>%
+  ggplot(aes(x = Traffic, y = Delivery_Time, fill = Traffic)) +
+  geom_boxplot(alpha = 0.85, outlier.alpha = 0.2) +
+  scale_fill_manual(values = c("#8AC926", "#E9C46A", "#F4A261", "#E63946")) +
+  labs(title = "Tiempo de entrega según nivel de tráfico",
+       x = "Nivel de tráfico", y = "Tiempo de entrega (min)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+```
+
+```{r trafico-tabla}
+data %>%
+  filter(Traffic != "NaN") %>%
+  mutate(Traffic = factor(Traffic, levels = c("Low", "Medium", "High", "Jam"))) %>%
+  group_by(Traffic) %>%
+  summarise(
+    Media    = round(mean(Delivery_Time), 1),
+    Mediana  = median(Delivery_Time),
+    `Desv. típica` = round(sd(Delivery_Time), 1),
+    N        = n()
+  ) %>%
+  kable(caption = "Tiempo de entrega medio por nivel de tráfico")
+```
+
+### Condiciones meteorológicas
+
+Las condiciones climáticas pueden dificultar tanto la conducción como el acceso a los puntos de entrega, incrementando los tiempos de servicio.
+
+```{r clima}
+data %>%
+  filter(!is.na(Weather)) %>%
+  group_by(Weather) %>%
+  summarise(media = mean(Delivery_Time, na.rm = TRUE), n = n()) %>%
+  arrange(desc(media)) %>%
+  ggplot(aes(x = reorder(Weather, media), y = media, fill = media)) +
+  geom_col(show.legend = FALSE, alpha = 0.9) +
+  geom_text(aes(label = round(media, 1)), hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  scale_fill_gradient(low = "#A8DADC", high = "#1D3557") +
+  labs(title = "Tiempo de entrega medio por condición meteorológica",
+       x = NULL, y = "Tiempo medio (min)") +
+  theme_minimal(base_size = 12) +
+  ylim(0, 160)
+```
+
+### Tipo de vehículo
+
+El vehículo empleado condiciona tanto la velocidad de desplazamiento como la capacidad de carga, dos variables directamente relacionadas con la eficiencia de la ruta.
+
+```{r vehiculo}
+data %>%
+  group_by(Vehicle) %>%
+  summarise(media = mean(Delivery_Time, na.rm = TRUE), n = n()) %>%
+  ggplot(aes(x = reorder(Vehicle, -media), y = media, fill = Vehicle)) +
+  geom_col(alpha = 0.9, show.legend = FALSE) +
+  geom_text(aes(label = round(media, 1)), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c("#264653", "#2A9D8F", "#E9C46A", "#E63946")) +
+  labs(title = "Tiempo de entrega medio por tipo de vehículo",
+       x = NULL, y = "Tiempo medio (min)") +
+  theme_minimal(base_size = 12) +
+  ylim(0, 160)
+```
+
+---
+
+## Rendimiento de los repartidores
+
+### Distribución de edad y valoración
+
+Los repartidores quedan caracterizados en el dataset por su edad y su valoración media como agentes. Ambas variables pueden estar relacionadas con la eficiencia en la entrega.
+
+```{r agentes-dist}
+p1 <- ggplot(data, aes(x = Agent_Age)) +
+  geom_histogram(binwidth = 2, fill = "#6A4C93", color = "white", alpha = 0.85) +
+  labs(title = "Distribución de edad de los repartidores",
+       x = "Edad", y = "Frecuencia") +
+  theme_minimal(base_size = 11)
+
+p2 <- data %>%
+  filter(!is.na(Agent_Rating)) %>%
+  ggplot(aes(x = Agent_Rating)) +
+  geom_histogram(binwidth = 0.1, fill = "#1982C4", color = "white", alpha = 0.85) +
+  labs(title = "Distribución de valoración de los repartidores",
+       x = "Valoración", y = "Frecuencia") +
+  theme_minimal(base_size = 11)
+
+library(patchwork)
+p1 + p2
+```
+
+### Relación entre valoración y tiempo de entrega
+
+¿Los repartidores mejor valorados son también los más rápidos? El siguiente gráfico de dispersión, con una línea de tendencia suavizada, permite explorar esta relación.
+
+```{r agentes-scatter}
+data %>%
+  filter(!is.na(Agent_Rating)) %>%
+  ggplot(aes(x = Agent_Rating, y = Delivery_Time)) +
+  geom_point(alpha = 0.08, color = "#1982C4", size = 1) +
+  geom_smooth(method = "loess", color = "#E63946", linewidth = 1, se = TRUE) +
+  labs(title = "Valoración del repartidor vs. tiempo de entrega",
+       x = "Valoración del agente", y = "Tiempo de entrega (min)") +
+  theme_minimal(base_size = 12)
+```
+
+### Relación entre edad y tiempo de entrega
+
+```{r agentes-edad}
+data %>%
+  ggplot(aes(x = Agent_Age, y = Delivery_Time)) +
+  geom_point(alpha = 0.06, color = "#6A4C93", size = 1) +
+  geom_smooth(method = "loess", color = "#E63946", linewidth = 1, se = TRUE) +
+  labs(title = "Edad del repartidor vs. tiempo de entrega",
+       x = "Edad del agente", y = "Tiempo de entrega (min)") +
+  theme_minimal(base_size = 12)
+```
+
+---
+
+## Comparativa entre zonas
+
+Las características del entorno (metropolitano, urbano, semiurbano) determinan en gran medida la densidad de tráfico, la dispersión geográfica de los pedidos y, por ende, los tiempos de entrega. El siguiente análisis compara el comportamiento del servicio entre las distintas tipologías de zona.
+
+```{r zonas-boxplot}
+data %>%
+  mutate(Area = factor(Area, levels = c("Urban", "Metropolitian", "Semi-Urban", "Other"))) %>%
+  ggplot(aes(x = Area, y = Delivery_Time, fill = Area)) +
+  geom_violin(alpha = 0.7, trim = FALSE) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.alpha = 0.1) +
+  scale_fill_manual(values = c("#2A9D8F", "#E9C46A", "#F4A261", "#264653")) +
+  labs(title = "Distribución del tiempo de entrega por zona",
+       x = NULL, y = "Tiempo de entrega (min)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+```
+
+```{r zonas-tabla}
+data %>%
+  group_by(Area) %>%
+  summarise(
+    Media    = round(mean(Delivery_Time), 1),
+    Mediana  = median(Delivery_Time),
+    `Desv. típica` = round(sd(Delivery_Time), 1),
+    `N pedidos`    = n()
+  ) %>%
+  arrange(desc(Media)) %>%
+  kable(caption = "Estadísticas de tiempo de entrega por zona")
+```
+
+También resulta interesante ver qué tipo de vehículo predomina en cada zona, ya que esto tiene implicaciones directas sobre la capacidad de carga y el diseño de las rutas.
+
+```{r zonas-vehiculo}
+data %>%
+  count(Area, Vehicle) %>%
+  group_by(Area) %>%
+  mutate(pct = n / sum(n)) %>%
+  ggplot(aes(x = Area, y = pct, fill = Vehicle)) +
+  geom_col(position = "fill", alpha = 0.9) +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_manual(values = c("#264653", "#2A9D8F", "#E9C46A", "#E63946")) +
+  labs(title = "Distribución de vehículos por zona",
+       x = NULL, y = "Proporción", fill = "Vehículo") +
+  theme_minimal(base_size = 12)
+```
+
+---
+
+## Distribución geográfica de los pedidos
+
+Las coordenadas de origen (`Store`) y destino (`Drop`) permiten visualizar dónde se concentra la actividad de reparto y cuál es la distancia típica recorrida en cada entrega.
+
+```{r geo-mapa}
+data %>%
+  sample_n(min(5000, nrow(data))) %>%
+  ggplot() +
+  geom_point(aes(x = Store_Longitude, y = Store_Latitude),
+             color = "#E63946", alpha = 0.4, size = 0.8, shape = 16) +
+  geom_point(aes(x = Drop_Longitude, y = Drop_Latitude),
+             color = "#2A9D8F", alpha = 0.3, size = 0.8, shape = 16) +
+  labs(title = "Distribución geográfica de orígenes y destinos",
+       subtitle = "Rojo: puntos de origen (tiendas) · Verde: puntos de entrega",
+       x = "Longitud", y = "Latitud") +
+  theme_minimal(base_size = 12)
+```
+
+```{r geo-distancia}
+# Cálculo de distancia haversine aproximada entre origen y destino
+haversine <- function(lat1, lon1, lat2, lon2) {
+  R <- 6371
+  dlat <- (lat2 - lat1) * pi / 180
+  dlon <- (lon2 - lon1) * pi / 180
+  a <- sin(dlat/2)^2 + cos(lat1*pi/180) * cos(lat2*pi/180) * sin(dlon/2)^2
+  R * 2 * atan2(sqrt(a), sqrt(1 - a))
+}
+
+data <- data %>%
+  mutate(distancia_km = haversine(Store_Latitude, Store_Longitude,
+                                   Drop_Latitude,  Drop_Longitude))
+
+data %>%
+  filter(distancia_km < quantile(distancia_km, 0.99)) %>%   # excluimos outliers extremos
+  ggplot(aes(x = distancia_km)) +
+  geom_histogram(binwidth = 1, fill = "#264653", color = "white", alpha = 0.85) +
+  labs(title = "Distribución de la distancia recorrida por entrega",
+       x = "Distancia (km)", y = "Número de pedidos") +
+  theme_minimal(base_size = 12)
+```
+
+```{r geo-distancia-zona}
+data %>%
+  filter(distancia_km < quantile(distancia_km, 0.99)) %>%
+  group_by(Area) %>%
+  summarise(
+    `Distancia media (km)` = round(mean(distancia_km), 2),
+    `Distancia mediana (km)` = round(median(distancia_km), 2)
+  ) %>%
+  kable(caption = "Distancia media recorrida por zona")
+```
+
+---
+
+## Correlaciones entre variables numéricas
+
+Por último, analizamos la matriz de correlaciones entre las variables numéricas del dataset para identificar relaciones lineales de interés.
+
+```{r correlaciones}
+vars_num <- data %>%
+  select(Agent_Age, Agent_Rating, Delivery_Time, distancia_km) %>%
+  filter(complete.cases(.))
+
+cor_matrix <- cor(vars_num)
+
+corrplot(cor_matrix,
+         method   = "color",
+         type     = "upper",
+         addCoef.col = "black",
+         tl.col   = "black",
+         tl.srt   = 30,
+         col      = colorRampPalette(c("#E63946", "white", "#2A9D8F"))(200),
+         title    = "Matriz de correlaciones",
+         mar      = c(0, 0, 2, 0))
+```
+
+---
+
+## Conclusiones del análisis
+
+A partir del análisis realizado se pueden extraer las siguientes conclusiones relevantes para el diseño del sistema de optimización:
+
+- El **nivel de tráfico** es el factor que presenta una relación más clara con el tiempo de entrega: las situaciones de atasco (`Jam`) incrementan notablemente la duración media respecto a niveles bajos de congestión.
+- Las **condiciones meteorológicas** influyen de forma moderada, con las condiciones más adversas (tormenta, niebla) asociadas a tiempos de entrega superiores.
+- El **tipo de vehículo** muestra diferencias en el tiempo medio de entrega, aunque estas pueden estar mediadas por la zona y la distancia del recorrido más que por la velocidad del vehículo en sí.
+- Ni la **edad** ni la **valoración** del repartidor presentan una correlación fuerte con el tiempo de entrega, lo que sugiere que los factores externos (tráfico, clima, distancia) tienen mayor peso que las características individuales del agente.
+- La zona **metropolitana** concentra la mayoría de los pedidos y presenta mayor variabilidad en los tiempos de entrega, lo que la convierte en el entorno de mayor interés para la optimización.
+- La **distancia** entre origen y destino es la variable numérica con mayor correlación con el tiempo de entrega, lo que valida el enfoque de minimización de distancia recorrida adoptado en el modelo VRP.
