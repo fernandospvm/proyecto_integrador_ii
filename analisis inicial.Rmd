@@ -1,0 +1,71 @@
+---
+title: "Analisis inicial"
+author: "Fernando San Prudencio"
+date: "2026-04-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+## Descripción de los datos
+
+El conjunto de datos contiene información sobre pedidos de entrega, incluyendo características del repartidor (edad y valoración), variables geográficas (coordenadas de origen y destino), condiciones externas como el clima y el tráfico, así como el tipo de vehículo y la categoría del pedido.
+
+La variable principal de interés es **Delivery_Time**, que mide el tiempo de entrega en minutos. Por otro lado, la variable **Area** clasifica el entorno de la entrega (por ejemplo, urbano o metropolitano), lo que permite analizar cómo influye el contexto en la eficiencia del servicio.
+
+## Carga de datos y variables que hay
+
+```{r}
+data <- read.csv("amazon_delivery.csv")
+head(data)
+```
+## Nombres de todas las variables que hay
+```{r}
+names(data)
+```
+## Cálculo de estadísticas descriptivas
+
+```{r}
+resumen <- data %>%
+  summarise(
+    media = mean(Delivery_Time, na.rm = TRUE),
+    sd = sd(Delivery_Time, na.rm = TRUE),
+    minimo = min(Delivery_Time, na.rm = TRUE),
+    maximo = max(Delivery_Time, na.rm = TRUE)
+  )
+
+resumen
+```
+
+## Zona predominante
+
+```{r}
+zona_predominante <- data %>%
+  count(Area, sort = TRUE) %>%
+  slice(1) %>%
+  pull(Area)
+
+zona_predominante
+```
+
+## Informe automático
+
+```{r results='asis'}
+cat(paste0(
+  "El tiempo de entrega presenta una media de ",
+  round(resumen$media, 1),
+  " minutos y una desviación típica de ",
+  round(resumen$sd, 1),
+  " minutos, con valores comprendidos entre ",
+  resumen$minimo,
+  " y ",
+  resumen$maximo,
+  " minutos, lo que refleja la alta variabilidad propia de los entornos urbanos. ",
+  "La zona predominante en el subconjunto analizado es la ",
+  zona_predominante,
+  ", en consonancia con el contexto de ciudad denso que estudia este proyecto."
+))
+```
